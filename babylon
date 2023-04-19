@@ -1,0 +1,641 @@
+const createScene = function (engine, canvas) {
+
+    // Crear una escena de Babylon básica
+    const scene = new BABYLON.Scene(engine);
+
+    // Cambiar el color de fondo de la escena
+    scene.clearColor = new BABYLON.Color4(0.09804, 0.02745, 0.09804, 1);
+
+    // Configurar la cámara ArcRotateCamera
+    const camera = new BABYLON.ArcRotateCamera("camera", Math.PI / 2, Math.PI / 4, 25, new BABYLON.Vector3(7.22, 5, 0), scene);
+    camera.attachControl(canvas, true);
+    camera.lowerBetaLimit = 0.4;
+    camera.lowerRadiusLimit = 10.5;
+    camera.upperRadiusLimit = 120;
+    camera.useBouncingBehavior = true;
+    camera.fov = 0.85;
+    camera.upperBetaLimit = Math.PI / 2;
+    camera.angularSensibilityX = 1000;
+    camera.angularSensibilityY = 1000;
+    camera.useAutoRotationBehavior = true;
+    camera.autoRotationBehavior.idleRotationSpeed = -0.05;
+    camera.useFramingBehavior = true;
+    camera.useAutoRotationBehavior = true;
+    const minY = -5;
+    const maxY = 5;
+    camera.setTarget(camera.target.clone(), camera.position.y < minY ? minY : camera.position.y > maxY ? maxY : camera.position.y);
+    camera.onAfterCheckInputs = function () {
+        if (camera.position.y < 0) {
+            camera.position.y = Math.max(0, camera.position.y);
+        }
+    };
+
+    // Configurar la cámara ortográfica
+    const orthoCamera = new BABYLON.FreeCamera("orthoCamera", new BABYLON.Vector3(0, 50, 0), scene);
+    orthoCamera.position = new BABYLON.Vector3(7, 10, 5);
+    orthoCamera.mode = BABYLON.Camera.ORTHOGRAPHIC_CAMERA;
+    orthoCamera.rotation.x = Math.PI / 2;
+    var zoomScale = 8;
+    orthoCamera.orthoTop = 100 / zoomScale;
+    orthoCamera.orthoBottom = -100 / zoomScale;
+    orthoCamera.orthoLeft = -100 / zoomScale;
+    orthoCamera.orthoRight = 100 / zoomScale;
+
+    // Configurar las luces
+    const light1 = new BABYLON.HemisphericLight("light1", new BABYLON.Vector3(0, 1, 0), scene);
+    light1.intensity = 0.65;
+    const light2 = new BABYLON.DirectionalLight("light2", new BABYLON.Vector3(-1, -1, -1), scene);
+    light2.position = new BABYLON.Vector3(10, 10, 10);
+    light2.intensity = 0.5;
+    const shadowGenerator = new BABYLON.ShadowGenerator(1024, light2);
+    shadowGenerator.usePercentageCloserFiltering = true;
+    shadowGenerator.usePoissonSampling = true;
+    shadowGenerator.blurScale = 2;
+
+    const environment = scene.createDefaultEnvironment({
+        skyboxSize: 1500,
+        skyboxColor: new BABYLON.Color3(0.01, 0, 0.01),
+        groundSize: 100,
+        groundColor: new BABYLON.Color3(0.05, 0.02, 0.05),
+        groundShadowLevel: 0.65,
+        enableGroundMirror: true,
+        groundMirrorAmount: 0.4,
+        groundMirrorSizeRatio: 1,
+        groundMirrorRenderList: []
+    });
+
+    const setCylinderGlowEffect = (cylinder, scene, glowLayer, isHovered, isCasingPickable) => {
+        if (isHovered && !isCasingPickable) {
+            glowLayer.addIncludedOnlyMesh(cylinder);
+            cylinder.material.emissiveColor = new BABYLON.Color3(0, 1, 0.22);
+
+        } else {
+            cylinder.material.emissiveColor = BABYLON.Color3.Black();
+            glowLayer.removeIncludedOnlyMesh(cylinder);
+        }
+    };
+
+    // Definir variables y capas de efectos
+    const cylinderRadius = 0.5;
+    const cylinderHeight = 2.5;
+    const hexagonHeight = Math.sqrt(3) * cylinderRadius * 2;
+    const glowLayer = new BABYLON.GlowLayer("glowLayer", scene);
+    glowLayer.intensity = 0.3;
+    glowLayer.blurKernelSize = 15;
+    const highlightLayer = new BABYLON.HighlightLayer("highlightLayer", scene);
+    highlightLayer.outerGlow = false;
+    highlightLayer.innerGlow = true;
+    const cylinders = [];
+
+    // Función para crear un cilindro
+    const createCylinder = (x, z, scene, randomHeight, index) => {
+        // Crear y posicionar el cilindro
+        const cylinder = BABYLON.MeshBuilder.CreateCylinder(`cylinder_${index}`, { height: randomHeight, diameter: cylinderRadius * 1.8, tessellation: 6 }, scene);
+        cylinder.position.x = x + cylinderRadius * 1.5;
+        cylinder.position.y = randomHeight / 2;
+        cylinder.position.z = z + hexagonHeight * 0.125;
+        const pivotAtBase = BABYLON.Matrix.Translation(0, randomHeight / 2, 0);
+        cylinder.setPivotMatrix(pivotAtBase);
+        cylinder.convertToFlatShadedMesh();
+        cylinder.isSelected = false;
+        cylinder.actionManager = new BABYLON.ActionManager(scene);
+
+        // Función para animar el escalado
+        const animateScaling = (targetScalingY, duration, targetCylinder, enablePickable = true) => {
+            const animationScaling = new BABYLON.Animation("scalingAnimation", "scaling.y", 30, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+            const keyFramesScaling = [];
+
+            keyFramesScaling.push({
+                frame: 0,
+                value: targetCylinder.scaling.y,
+            });
+
+            keyFramesScaling.push({
+                frame: duration,
+                value: targetScalingY,
+            });
+
+            animationScaling.setKeys(keyFramesScaling);
+            targetCylinder.animations = [animationScaling];
+
+            // Actualizar el estado 'pickable' después de que se complete la animación
+            scene.beginAnimation(targetCylinder, 0, duration, false).onAnimationEnd = () => {
+                targetCylinder.isPickable = enablePickable;
+            };
+        };
+
+        cylinder.actionManager.registerAction(
+            new BABYLON.ExecuteCodeAction(
+                BABYLON.ActionManager.OnPointerOverTrigger,
+                () => {
+                    if (cylinder.scaling.y > 0.01 && !cylinder.isSelected) {
+                        animateScaling(1.5, 2, cylinder, true);
+                        if (cylinder.isConnected) {
+                        }
+                        setCylinderGlowEffect(cylinder, scene, glowLayer, true);
+                    }
+                    showInfoPanel(cylinder);
+                }
+            )
+        );
+
+        cylinder.actionManager.registerAction(
+            new BABYLON.ExecuteCodeAction(
+                BABYLON.ActionManager.OnPointerOutTrigger,
+                () => {
+                    if (cylinder.scaling.y > 0.01 && !cylinder.isSelected) {
+                        animateScaling(1, 2, cylinder, true);
+                        if (cylinder.isConnected) {
+                        }
+                        setCylinderGlowEffect(cylinder, scene, glowLayer, false);
+                    }
+                }
+            )
+        );
+
+        cylinder.actionManager.registerAction(
+            new BABYLON.ExecuteCodeAction(
+                BABYLON.ActionManager.OnPickTrigger,
+                () => {
+                    cylinder.isSelected = !cylinder.isSelected;
+                    if (cylinder.isSelected) {
+                        animateScaling(1, 2, cylinder);
+                        setCylinderGlowEffect(cylinder, scene, glowLayer, true);
+                    } else {
+                        animateScaling(1.5, 2, cylinder);
+                        setCylinderGlowEffect(cylinder, scene, glowLayer, false);
+                    }
+
+                    cylinders.forEach((otherCylinder) => {
+                        if (otherCylinder !== cylinder) {
+                            animateScaling(0.01, 2, otherCylinder);
+                            otherCylinder.isSelected = false;
+                            setCylinderGlowEffect(otherCylinder, scene, glowLayer, false);
+                        }
+                    });
+
+                    const cylinderInfo = `Nombre: ${cylinder.name}\nAltura: ${randomHeight.toFixed(2)}\nPosición: (${cylinder.position.x.toFixed(2)}, ${cylinder.position.y.toFixed(2)}, ${cylinder.position.z.toFixed(2)})`;
+                    infoText.text = cylinderInfo;
+                    infoPanel.isVisible = true;
+                    // Actualizar el estado del botón "Connect" cuando se selecciona un cilindro
+                    connectButton.isEnabled = cylinders.filter(c => c.isSelected).length === 1;
+                }
+            )
+        );
+
+        cylinder.material = new BABYLON.StandardMaterial("cylinderMat", scene);
+        cylinder.material.diffuseColor = new BABYLON.Color3(0.72, 0.71, 0.71); // Establecer el color difuso a gris oscuro
+        cylinder.material.specularColor = new BABYLON.Color3(0.63, 0.63, 0.63); // Establecer el color especular
+        cylinder.material.specularPower = 3; // Establecer la potencia especular
+        cylinder.isSelected = false;
+
+        return cylinder;
+    };
+
+    // Función para obtener un número aleatorio entre min y max
+    const getRandomArbitrary = (min, max) => {
+        return Math.random() * (max - min) + min;
+    };
+
+    // Número de filas y columnas 
+    const rows = 20;
+    const columns = 10;
+    let maxHeight = 0;
+    // Crear cilindros en una matriz de filas y columnas
+    for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < columns; j++) {
+            const offsetX = (i % 2 === 0) ? 0 : cylinderRadius * 1.5;
+            const x = j * cylinderRadius * 3 + offsetX;
+            const z = i * hexagonHeight * 0.25;
+            const randomHeight = getRandomArbitrary(cylinderHeight * 0.5, cylinderHeight * 1.5); // Altura aleatoria entre 0.5 y 1.5 veces la altura original
+            const cylinderIndex = i * columns + j;
+            const cylinder = createCylinder(x, z, scene, randomHeight, cylinderIndex);
+            maxHeight = Math.max(maxHeight, randomHeight);
+            cylinder.receiveShadows = true;
+            cylinders.push(cylinder);
+        }
+    }
+
+    const hexagono = 1;
+    const offsetY = -0.5; // Cambia este valor para ajustar la altura de la matriz de hexágonos
+    const lineThickness = 0.02; // Cambia este valor para ajustar el grosor de la línea
+
+    const hexagonShape = [
+        new BABYLON.Vector3(hexagono / 2, offsetY, 0),
+        new BABYLON.Vector3(hexagono / 4, offsetY, hexagono * Math.sqrt(3) / 4),
+        new BABYLON.Vector3(-hexagono / 4, offsetY, hexagono * Math.sqrt(3) / 4),
+        new BABYLON.Vector3(-hexagono / 2, offsetY, 0),
+        new BABYLON.Vector3(-hexagono / 4, offsetY, -hexagono * Math.sqrt(3) / 4),
+        new BABYLON.Vector3(hexagono / 4, offsetY, -hexagono * Math.sqrt(3) / 4),
+        new BABYLON.Vector3(hexagono / 2, offsetY, 0) // Agregar el primer punto de nuevo para cerrar el hexágono
+    ];
+
+    const hexagonPath = [hexagonShape[0], hexagonShape[1], hexagonShape[2], hexagonShape[3], hexagonShape[4], hexagonShape[5], hexagonShape[6]];
+
+    const box = BABYLON.MeshBuilder.CreateTube("hexagonoGrid", { path: hexagonPath, radius: lineThickness, tessellation: 6, updatable: false, sideOrientation: BABYLON.Mesh.DOUBLESIDE }, scene);
+    box.isVisible = false;
+
+    const boxRows = 250;
+    const boxColumns = 100;
+
+    const offsetXBoxes = ((boxColumns - columns) * cylinderRadius * 3) / 2 - cylinderRadius * 1.5 - 90 * cylinderRadius * 3;
+    const offsetZBoxes = ((boxRows - rows) * hexagonHeight * 0.25) / 2 - hexagonHeight * 0.125 - 220 * hexagonHeight * 0.25;
+
+    const smallBoxInstanceCount = boxRows * boxColumns;
+
+    let matricesData = new Float32Array(16 * smallBoxInstanceCount);
+
+    let index = 0;
+    for (let i = 0; i < boxRows; i++) {
+        for (let j = 0; j < boxColumns; j++) {
+            const offsetX = (i % 2 === 0) ? 0 : cylinderRadius * 1.5;
+            const x = j * cylinderRadius * 3 + offsetX + offsetXBoxes;
+            const z = i * hexagonHeight * 0.25 + offsetZBoxes;
+
+            const matrix = BABYLON.Matrix.Translation(x, hexagono / 2, z);
+            matrix.copyToArray(matricesData, index * 16);
+            index++;
+        }
+    }
+
+    const transparentMaterial = new BABYLON.StandardMaterial("transparentMaterial", scene);
+    transparentMaterial.alpha = 0.1;
+    transparentMaterial.alphaMode
+    transparentMaterial.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.78);
+    box.material = transparentMaterial;
+
+    box.thinInstanceSetBuffer("matrix", matricesData, 16);
+    box.isVisible = true;
+
+    const deselectAllCylinders = () => {
+        // Deseleccionar todos los cilindros y aplicar animaciones
+        cylinders.forEach((cylinder) => {
+            if (cylinder.isSelected) {
+                setCylinderGlowEffect(cylinder, scene, glowLayer, false);
+                cylinder.isSelected = false;
+            }
+
+            // Crear una animación para suavizar la transición a la escala de 1
+            const animation = new BABYLON.Animation(
+                "smoothScaleAnimation",
+                "scaling.y",
+                30, // frames por segundo
+                BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+                BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+            );
+
+            // Configurar las claves de animación
+            const keys = [
+                {
+                    frame: 0,
+                    value: cylinder.scaling.y
+                },
+                {
+                    frame: 3, // duración de la animación en frames
+                    value: 1
+                }
+            ];
+
+            animation.setKeys(keys);
+            cylinder.animations.push(animation);
+
+            // Iniciar la animación
+            scene.beginAnimation(cylinder, 0, 3, false, 1, () => {
+                // Asegurarse de que todos los cilindros sean pickables cuando se presione el botón "Exit"
+                cylinder.isPickable = true;
+                // Actualizar el estado del botón "Connect" cuando se deselecciona un cilindro
+                connectButton.isEnabled = cylinders.filter(c => c.isSelected).length === 1;
+            });
+        });
+
+        // Ocultar el panel de información
+        infoPanel.isVisible = false;
+        // Actualizar el estado del botón "Connect" cuando no hay cilindros seleccionados
+        connectButton.isEnabled = false;
+    };
+
+    function createInfoPanel(scene) {
+        const advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("infoUI");
+
+        const infoPanel = new BABYLON.GUI.Rectangle("infoPanel");
+        infoPanel.width = "250px";
+        infoPanel.height = "200px";
+        infoPanel.cornerRadius = 20;
+        infoPanel.color = "white";
+        infoPanel.thickness = 1;
+        infoPanel.background = "black";
+        infoPanel.alpha = 0.8;
+        infoPanel.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+        infoPanel.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+        infoPanel.top = "20px";
+        infoPanel.left = "20px";
+        infoPanel.isVisible = false; // El panel de información estará oculto por defecto
+        advancedTexture.addControl(infoPanel);
+
+        const infoText = new BABYLON.GUI.TextBlock();
+        infoText.color = "white";
+        infoText.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+        infoText.textVerticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+        infoPanel.addControl(infoText);
+
+        return { infoPanel, infoText };
+    }
+
+    const { infoPanel, infoText } = createInfoPanel(scene);
+
+    const advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+    const exitButton = BABYLON.GUI.Button.CreateSimpleButton("exitButton", "Exit");
+    exitButton.width = "80px";
+    exitButton.height = "40px";
+    exitButton.color = "white";
+    exitButton.background = "black";
+    exitButton.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    exitButton.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+    exitButton.paddingTop = "10px";
+    exitButton.paddingRight = "10px";
+
+    const deselectAllCylindersFunc = () => {
+        // Restaurar los cilindros a su escala original y desactivar el efecto de emisión
+        cylinders.forEach(cylinder => {
+            cylinder.scaling.y = 1;
+            cylinder.isSelected = false;
+            setCylinderGlowEffect(cylinder, scene, glowLayer, false);
+            cylinder.isPickable = true;
+        });
+    };
+
+    exitButton.onPointerUpObservable.add(() => {
+        deselectAllCylindersFunc();
+        selectedCylinder.material.emissiveColor = BABYLON.Color3.Black(); // Desactivar el efecto de emisión en el cilindro seleccionado
+        selectedCylinder = null; // Restablecer la variable 'selectedCylinder'
+        connectButton.isHitTestVisible = true; // Habilitar el botón "Connect"
+    });
+    advancedTexture.addControl(exitButton);
+
+    const createCasing = (width, depth, height, scene) => {
+        const casingHeight = maxHeight + 2;
+        const casing = BABYLON.MeshBuilder.CreateBox("casing", { width, depth, height: casingHeight }, scene);
+        casing.position.x = width / 2 - cylinderRadius * 1.5;
+        casing.position.y = casingHeight / 2; // Ajusta la posición en Y en función del cilindro más alto
+        casing.position.z = depth / 2 - hexagonHeight * 0.125;
+        const casingMaterial = new BABYLON.StandardMaterial("casingMat", scene);
+        casingMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+        casingMaterial.alpha = 0.3; // Si deseas que la carcasa sea ligeramente transparente
+        casingMaterial.hasAlpha = true; // Habilitar la transparencia en el material
+        casing.material = casingMaterial;
+        const pivotAtBase = BABYLON.Matrix.Translation(0, casingHeight / 2, 0);
+        casing.setPivotMatrix(pivotAtBase);
+        casing.isSelected = false;
+        casing.enableEdgesRendering();
+        casing.edgesWidth = 4.0;
+        casing.edgesColor = new BABYLON.Color4(1, 1, 1, 0.2);
+
+        camera.target = new BABYLON.Vector3(casing.position.x, casingHeight / 2, casing.position.z);
+
+        casing.actionManager = new BABYLON.ActionManager(scene);
+        casing.actionManager.registerAction(
+            new BABYLON.ExecuteCodeAction(
+                BABYLON.ActionManager.OnPointerOverTrigger,
+                () => {
+                    if (casing.isPickable) {
+                        setCasingHighlightEffect(casing, scene, highlightLayer, true);
+                    }
+                }
+            )
+        );
+
+        casing.actionManager.registerAction(
+            new BABYLON.ExecuteCodeAction(
+                BABYLON.ActionManager.OnPointerOutTrigger,
+                () => {
+                    if (casing.isPickable) {
+                        setCasingHighlightEffect(casing, scene, highlightLayer, false);
+                    }
+                }
+            )
+        );
+
+        casing.actionManager.registerAction(
+            new BABYLON.ExecuteCodeAction(
+                BABYLON.ActionManager.OnPickTrigger,
+                () => {
+                    if (casing.isPickable) {
+                        casing.isSelected = !casing.isSelected; // Cambiar el estado de selección de la carcasa
+                        setCasingHighlightEffect(casing, scene, highlightLayer, casing.isSelected);
+                    }
+                }
+            )
+        );
+
+        // Hacer que la carcasa sea transparente al puntero
+        casing.isPickable = false;
+
+        return casing; // Devuelve el objeto casing
+    };
+
+    const faButton = BABYLON.GUI.Button.CreateSimpleButton("faButton", "FA");
+    faButton.width = "80px";
+    faButton.height = "40px";
+    faButton.color = "white";
+    faButton.background = "blue";
+    faButton.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+    faButton.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_BOTTOM;
+    faButton.paddingBottom = "10px";
+    faButton.paddingLeft = "10px";
+    advancedTexture.addControl(faButton);
+
+    const fileButton = BABYLON.GUI.Button.CreateSimpleButton("fileButton", "File");
+    fileButton.width = "170px";
+    fileButton.height = "40px";
+    fileButton.color = "white";
+    fileButton.background = "black";
+    fileButton.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+    fileButton.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_BOTTOM;
+    fileButton.paddingBottom = "10px";
+    fileButton.paddingLeft = "100px";
+    advancedTexture.addControl(fileButton);
+
+    const connectButton = BABYLON.GUI.Button.CreateSimpleButton("connectButton", "Connect");
+    connectButton.width = "80px";
+    connectButton.height = "40px";
+    connectButton.color = "white";
+    connectButton.background = "blue";
+    connectButton.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+    connectButton.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+    connectButton.paddingTop = "10px";
+    connectButton.paddingLeft = "10px";
+    advancedTexture.addControl(connectButton);
+
+    const toggleButton = BABYLON.GUI.Button.CreateSimpleButton("toggleButton", "2D");
+    toggleButton.width = "80px";
+    toggleButton.height = "40px";
+    toggleButton.color = "white";
+    toggleButton.background = "black";
+    toggleButton.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    toggleButton.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_BOTTOM;
+    toggleButton.paddingBottom = "10px";
+    toggleButton.paddingRight = "10px";
+    advancedTexture.addControl(toggleButton);
+    const toggleCamera = () => {
+        if (scene.activeCamera === camera) {
+            scene.activeCamera = orthoCamera;
+            toggleButton.textBlock.text = "3D";
+        } else {
+            scene.activeCamera = camera;
+            toggleButton.textBlock.text = "2D";
+        }
+    };
+    toggleButton.onPointerUpObservable.add(toggleCamera);
+
+    const casingHeight = maxHeight + 2;
+    const casingWidth = (columns + 1) * cylinderRadius * 3;
+    const casingDepth = rows * hexagonHeight * 0.25 + hexagonHeight * 0.5;
+
+    const casing = createCasing(casingWidth, casingDepth, casingHeight, scene);
+    cylinders.forEach(cylinder => {
+        cylinder.isPickable = false;
+    });
+
+    casing.isPickable = true;
+
+    environment.groundMaterial.reflectionTexture.renderList.push(casing);
+    cylinders.forEach(cylinder => {
+        environment.groundMaterial.reflectionTexture.renderList.push(cylinder);
+        environment.groundMaterial.reflectionTexture.adaptationDistance = 300;
+    });
+    shadowGenerator.addShadowCaster(casing);
+    cylinders.forEach(cylinder => {
+        shadowGenerator.addShadowCaster(cylinder);
+    });
+
+    const setCasingHighlightEffect = (casing, scene, highlightLayer, isHighlighted) => {
+        if (isHighlighted) {
+            highlightLayer.addMesh(casing, new BABYLON.Color3(0, 0.5, 1));
+        } else {
+            highlightLayer.removeMesh(casing);
+        }
+    };
+
+    const setButtonStates = (activeButton, inactiveButton, casing) => {
+        activeButton.background = "blue";
+        inactiveButton.background = "black";
+
+        if (activeButton === faButton) {
+            casing.isPickable = true;
+
+            // Restablecer la escala de la carcasa a su tamaño original
+            const scalingAnimation = new BABYLON.Animation(
+                "casingScalingAnimation",
+                "scaling.y",
+                30,
+                BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+                BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+            );
+
+            const scalingKeys = [
+                { frame: 0, value: casing.scaling.y },
+                { frame: 5, value: 1 }
+            ];
+
+            scalingAnimation.setKeys(scalingKeys);
+            casing.animations = [scalingAnimation];
+            scene.beginAnimation(casing, 0, 5, false);
+
+        } else if (activeButton === fileButton) {
+            casing.isPickable = false;
+
+            // Escalar la carcasa a 0.01 en altura
+            const scalingAnimation = new BABYLON.Animation(
+                "casingScalingAnimation",
+                "scaling.y",
+                30,
+                BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+                BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+            );
+
+            const scalingKeys = [
+                { frame: 0, value: casing.scaling.y },
+                { frame: 5, value: 0.01 }
+            ];
+
+            scalingAnimation.setKeys(scalingKeys);
+            casing.animations = [scalingAnimation];
+            scene.beginAnimation(casing, 0, 5, false);
+        }
+    };
+    faButton.onPointerUpObservable.add(() => {
+        setButtonStates(faButton, fileButton, casing);
+        // Asegurar que los cilindros no sean 'pickable' cuando la carcasa es 'pickable'
+        cylinders.forEach(cylinder => {
+            cylinder.isPickable = !casing.isPickable;
+        });
+    });
+
+    fileButton.onPointerUpObservable.add(() => {
+        setButtonStates(fileButton, faButton, casing);
+        // Asegurar que los cilindros sean 'pickable' cuando la carcasa no es 'pickable'
+        cylinders.forEach(cylinder => {
+            cylinder.isPickable = !casing.isPickable;
+        });
+    });
+
+    connectButton.onPointerUpObservable.add(() => {
+        // Seleccionar aleatoriamente 5 cilindros que no estén seleccionados
+        const selectedCylinder = cylinders.find(cylinder => cylinder.isSelected);
+        const unselectedCylinders = cylinders.filter(cylinder => !cylinder.isSelected);
+        const randomCylinders = [];
+        for (let i = 0; i < 5; i++) {
+            const randomIndex = Math.floor(Math.random() * unselectedCylinders.length);
+            const randomCylinder = unselectedCylinders[randomIndex];
+            randomCylinder.scaling.y = 0.5;
+            randomCylinder.isSelected = true;
+            randomCylinders.push(randomCylinder);
+            unselectedCylinders.splice(randomIndex, 1);
+        }
+        // Escalar el cilindro seleccionado y marcarlo como no seleccionado
+        selectedCylinder.scaling.y = 1;
+        selectedCylinder.isSelected = false;
+
+        // Crear una línea para cada cilindro seleccionado aleatoriamente
+        randomCylinders.forEach(randomCylinder => {
+            // Obtener la posición del centro del cilindro seleccionado
+            const start = selectedCylinder.getAbsolutePosition().add(new BABYLON.Vector3(0, selectedCylinder.scaling.y / 2, 0));
+            // Obtener la posición del centro del cilindro seleccionado aleatoriamente
+            const end = randomCylinder.getAbsolutePosition().add(new BABYLON.Vector3(0, randomCylinder.scaling.y / 2, 0));
+            // Crear la línea
+            const line = BABYLON.MeshBuilder.CreateTube("line", { path: [start, end], radius: 0.05, sideOrientation: BABYLON.Mesh.DOUBLESIDE, updatable: false, instance: null }, scene);
+            // Establecer el material de la línea
+            const material = new BABYLON.StandardMaterial("lineMaterial", scene);
+            material.emissiveColor = BABYLON.Color3.Red();
+            line.material = material;
+            // Anima la línea para que se muestre de manera más clara
+            const animation = new BABYLON.Animation("lineAnimation", "visibility", 30, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+            const keys = [];
+            keys.push({ frame: 0, value: 0 });
+            keys.push({ frame: 30, value: 1 });
+            animation.setKeys(keys);
+            line.animations.push(animation);
+            scene.beginAnimation(line, 0, 30, false);
+        });
+
+        // Deshabilitar el botón Connect
+        connectButton.isEnabled = false;
+    });
+
+    // Registrar una acción para el botón Exit
+    exitButton.onPointerUpObservable.add(() => {
+        deselectAllCylinders();
+
+        // Eliminar las líneas de conexión
+        scene.meshes.forEach(mesh => {
+            if (mesh.name === "line") {
+                mesh.dispose();
+            }
+        });
+
+        // Habilitar el botón Connect
+        connectButton.isEnabled = true;
+    });
+
+    return scene;
+};
